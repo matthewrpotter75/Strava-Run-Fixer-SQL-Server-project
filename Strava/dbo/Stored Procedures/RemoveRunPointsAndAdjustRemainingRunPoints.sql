@@ -1,10 +1,11 @@
-﻿CREATE PROCEDURE [dbo].[RemoveRunPointsAndAdjustRemainingRunPoints]
+﻿CREATE PROCEDURE dbo.RemoveRunPointsAndAdjustRemainingRunPoints
 (
 	@TableName VARCHAR(100),
 	@StartDeleteMovingTime TIME,
 	@EndDeleteMovingTime TIME,
 	@IsAdjustHR TINYINT = 0,
 	@IsNoMaxHR TINYINT = 0,
+	@HRTimeLimitAfterStop INT = 300,
 	@Debug TINYINT = 0
 )
 AS
@@ -16,12 +17,13 @@ BEGIN
 
 		DECLARE @StartDeleteTimeId INT,
 				@EndDeleteTimeId INT,
-				@EndHRTimeId INT,
+				--@EndHRTimeId INT,
 				@StartDeleteTime DATETIME,
 				@EndDeleteTime DATETIME,
 				@StartHR INT,
-				@FixHR INT,
-				@PreviousHR INT,
+				@EndHR INT,
+				--@FixHR INT,
+				@TimeAddedAfterStopIds INT,
 				--@NextIdOfSameHR INT,
 				@EndFixHRId INT,
 				@DiffTime INT,
@@ -71,45 +73,6 @@ BEGIN
 		SELECT @StartDeleteTimeId = Id, @StartDeleteTime = [Time] FROM #RunPointsTable WHERE MovingTime = @StartDeleteMovingTime;
 		SELECT @EndDeleteTimeId = Id, @EndDeleteTime = [Time] FROM #RunPointsTable WHERE MovingTime = @EndDeleteMovingTime;
 
-		IF @IsAdjustHR = 1
-		BEGIN
-
-			SELECT @PreviousHR = LAG(HR,1) OVER (ORDER BY Id) FROM #RunPointsTable WHERE Id IN( @StartDeleteTimeId,@StartDeleteTimeId - 1);
-			SELECT @EndHRTimeId = MIN(Id) FROM #RunPointsTable WHERE MovingTime >= @EndDeleteMovingTime AND HR = @PreviousHR;
-			
-			IF @EndHRTimeId IS NULL
-				--Set end time to look for max HR as 2 mins after end delete time
-				SELECT @EndHRTimeId = MIN(Id) FROM #RunPointsTable WHERE MovingTime >= DATEADD(s,120,@EndDeleteMovingTime);
-
-			IF @Debug = 1
-				SELECT @EndHRTimeId AS EndHRTimeId, @PreviousHR AS PreviousHR, DATEADD(s,120,@EndDeleteMovingTime) AS MovingTimeGreaterThanCheck;
-
-			--If time is past the end of the run then use the last point of the run
-			IF @EndHRTimeId IS NULL
-				SELECT @EndHRTimeId = MAX(Id) FROM #RunPointsTable;
-
-			IF @IsNoMaxHR = 0
-			BEGIN
-
-				SELECT @FixHR = MAX(HR) FROM #RunPointsTable WHERE Id > @EndDeleteTimeId AND Id <= @EndHRTimeId;
-
-				SELECT @EndFixHRId = MIN(Id) FROM #RunPointsTable WHERE (Id > @EndDeleteTimeId AND Id <= @EndHRTimeId) AND HR = @FixHR;
-
-				--SELECT @NextIdOfSameHR = MIN(Id) FROM #RunPointsTable WHERE Id > @StartDeleteTimeId AND HR >= @StartHR;
-
-			END
-			IF @IsNoMaxHR = 1
-			BEGIN
-
-				SELECT @FixHR = LAG(HR,1) OVER (ORDER BY Id) FROM #RunPointsTable WHERE Id IN (@StartDeleteTimeId, @StartDeleteTimeId - 1);
-
-				--If no max HR after segment to be adjusted then set end of run to be end time Id
-				SELECT @EndFixHRId = MAX(Id) + 1 FROM #RunPointsTable;
-
-			END
-
-		END
-
 		IF @Debug = 1
 		BEGIN
 
@@ -117,7 +80,7 @@ BEGIN
 			SELECT @EndDeleteTimeId AS EndDeleteTimeId, @EndDeleteTime AS EndDeleteTime, @EndDeleteMovingTime AS EndDeleteMovingTime;
 
 			IF @IsAdjustHR = 1
-				SELECT @EndHRTimeId AS EndHRTimeId, @EndFixHRId AS EndFixHRId, @FixHR AS FixHR;
+				SELECT @EndFixHRId AS EndFixHRId, @EndFixHRId AS EndFixHRId, @StartHR AS StartHR, @EndHR AS EndHR;
 
 			--SELECT @NextIdOfSameHR AS NextIdOfSameHR;
 
@@ -188,73 +151,6 @@ BEGIN
 
 		EXEC sp_executesql @SQL;
 
-		--This is handled in the LAG functions below
-		--IF @StartDeleteTimeId <> @EndDeleteTimeId
-		--BEGIN
-		
-		--	SET @SQL = '
-		--	UPDATE [Strava].[dbo].' + @TableName + '
-		--	SET PreviousTime = 
-		--	(
-		--		SELECT [Time]
-		--		FROM [Strava].[dbo].' + @TableName + '
-		--		WHERE Id = ' + CAST(@StartDeleteTimeId AS VARCHAR(10)) + '
-		--	)
-		--	WHERE Id = ' + CAST(@EndDeleteTimeId AS VARCHAR(10)) + ' + 1;';
-
-			--IF @Debug = 1
-		--		PRINT @SQL;
-
-		--	EXEC sp_executesql @SQL;
-
-		--END
-
-		--This is handled in the LAG functions below
-		--SET @SQL = '
-		--UPDATE r
-		--SET PreviousLat = prev.Lat, PreviousLon = prev.Lon, PreviousTime = prev.[Time]
-		--FROM [Strava].[dbo].' + @TableName + ' r
-		--INNER JOIN [Strava].[dbo].' + @TableName + ' prev
-		--ON r.Id -1 = prev.Id;';
-
-		--Should be handled below - hopefully no need for two scenarios of if start and delete time are the same or different
-		--IF @StartDeleteTimeId <> @EndDeleteTimeId
-		--BEGIN
-
-		--	SET @SQL = '
-		--	;WITH Previous AS
-		--	(
-		--		SELECT Id, PreviousLat = LAG(Lat,1) OVER (ORDER BY Id), PreviousLon = LAG(Lon,1) OVER (ORDER BY Id), PreviousTime = LAG([Time],1) OVER (ORDER BY Id)
-		--		FROM [Strava].[dbo].' + @TableName + '
-		--		WHERE Id IN (' + CAST(@StartDeleteTimeId AS VARCHAR(10)) + ',' + CAST(@EndDeleteTimeId AS VARCHAR(10)) +')
-		--	)
-		--	UPDATE r
-		--	SET PreviousLat = prev.PreviousLat, PreviousLon = prev.PreviousLon, PreviousTime = prev.PreviousTime
-		--	FROM [Strava].[dbo].' + @TableName + ' r
-		--	INNER JOIN Previous prev
-		--	ON r.Id = prev.Id
-		--	WHERE r.Id = ' +  CAST(@EndDeleteTimeId AS VARCHAR(10)) + ';'
-
-		--END
-		--ELSE
-		--BEGIN
-
-		--	SET @SQL = '
-		--	;WITH Previous AS
-		--	(
-		--		SELECT Id, PreviousLat = LAG(Lat,1) OVER (ORDER BY Id), PreviousLon = LAG(Lon,1) OVER (ORDER BY Id), PreviousTime = LAG([Time],1) OVER (ORDER BY Id)
-		--		FROM [Strava].[dbo].' + @TableName + '
-		--		WHERE Id IN (' + CAST(@StartDeleteTimeId AS VARCHAR(10)) + ',' + CAST((@StartDeleteTimeId - 1) AS VARCHAR(10)) +')
-		--	)
-		--	UPDATE r
-		--	SET PreviousLat = prev.PreviousLat, PreviousLon = prev.PreviousLon, PreviousTime = prev.PreviousTime
-		--	FROM [Strava].[dbo].' + @TableName + ' r
-		--	INNER JOIN Previous prev
-		--	ON r.Id = prev.Id
-		--	WHERE r.Id = ' +  CAST(@EndDeleteTimeId AS VARCHAR(10)) + ';'			
-
-		--END
-
 		--Update the PreviousLat, PreviousLon, and PreviousTime columns for the time adjusted rows
 		SET @SQL = '
 		;WITH Previous AS
@@ -290,20 +186,18 @@ BEGIN
 
 		EXEC sp_executesql @SQL;
 
+		--IF @IsAdjustHR = 1 AND @EndFixHRId IS NOT NULL
 		IF @IsAdjustHR = 1 AND @EndFixHRId IS NOT NULL
 		BEGIN
-		
-			--Adjust HR for all rows between end delete time and the end fix HR id
-			SET @SQL = '
-			UPDATE [Strava].[dbo].' + @TableName + '
-			SET HR = ' + CAST(@FixHR AS VARCHAR(3)) + ', IsAdjustHR = 1 
-			WHERE Id >= ' + CAST(@EndDeleteTimeId AS VARCHAR(10)) + '
-			AND Id < ' + CAST(@EndFixHRId AS VARCHAR(10)) + ';';
 
-			IF @Debug = 1
-				PRINT @SQL;
-
-			EXEC sp_executesql @SQL;
+			EXEC dbo.AdjustHRRunPoints
+			@TableName = @TableName,
+			@StartDeleteMovingTime = @StartDeleteMovingTime,
+			@EndDeleteMovingTime = @EndDeleteMovingTime,
+			@StartDeleteTime = @StartDeleteTime,
+			@EndDeleteTime = @EndDeleteTime,
+			@HRTimeLimitAfterStop = @HRTimeLimitAfterStop,
+			@Debug = @Debug;
 
 		END
 

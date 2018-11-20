@@ -1,7 +1,9 @@
-﻿CREATE PROCEDURE [dbo].[CreateAndLoadGPXFile]
+﻿CREATE PROCEDURE dbo.CreateAndLoadGPXFile
 (
 	@GPXFilename VARCHAR(1000),
 	@RunDate VARCHAR(8),
+	@IsDeleteAndRecreateTables TINYINT = 0,
+	@Tablename VARCHAR(100) OUTPUT,
 	@Debug TINYINT = 0
 )
 AS
@@ -11,8 +13,7 @@ BEGIN
 	SET XACT_ABORT ON;
 
 	DECLARE @SQL NVARCHAR(4000),
-			@ParmDefinition NVARCHAR(500),
-			@Tablename VARCHAR(100),
+			@ParmDefinition NVARCHAR(500),			
 			@TablenameXML VARCHAR(100),
 			@Rowcount INT,
 			@RowcountXML INT;
@@ -25,6 +26,23 @@ BEGIN
 		IF PATINDEX('%;%',@Tablename) = 0 AND PATINDEX('%GO%',@Tablename) = 0
 		BEGIN
 
+			IF @IsDeleteAndRecreateTables = 1 AND OBJECT_ID(@Tablename, 'U') IS NOT NULL
+			BEGIN
+
+				SET @SQL = 
+				'DROP TABLE dbo.' + @TablenameXML + ';
+
+				DROP TABLE dbo.' + @Tablename + ';';
+
+				IF @Debug = 1
+					PRINT @SQL;
+
+				EXEC sp_executesql @SQL;
+
+				PRINT 'TABLES DROPPED!!!';
+
+			END
+			
 			IF OBJECT_ID(@Tablename, 'U') IS NULL
 			BEGIN
 
@@ -160,6 +178,19 @@ BEGIN
 				EXEC sp_executesql @SQL;
 
 				PRINT 'Updated calculated columns in Run table!!!';
+
+				IF @Debug = 1
+				BEGIN
+
+					SET @SQL = 
+					'
+					SELECT *
+					FROM dbo.' + @Tablename + '
+					WHERE DiffTime > 5;';
+
+					EXEC sp_executesql @SQL;
+
+				END
 
 			END
 
